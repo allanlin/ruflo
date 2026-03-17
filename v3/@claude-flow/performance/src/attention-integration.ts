@@ -13,6 +13,12 @@
 
 import { createRequire } from 'node:module';
 
+export interface AttentionConfig {
+  dim: number;
+  numHeads?: number;
+  blockSize?: number;
+}
+
 interface AttentionRuntimeModule {
   FlashAttention: new (dim: number, blockSize?: number) => {
     compute(query: Float32Array, keys: Float32Array[], values: Float32Array[]): Float32Array;
@@ -26,6 +32,12 @@ interface AttentionRuntimeModule {
       mask: Float32Array,
     ): Float32Array;
   };
+  MultiHeadAttention: new (config: AttentionConfig) => {
+    compute(input: Float32Array): Float32Array;
+  };
+  LinearAttention: new (config: AttentionConfig) => {
+    compute(input: Float32Array): Float32Array;
+  };
 }
 
 const require = createRequire(import.meta.url);
@@ -38,6 +50,7 @@ export class FlashAttention {
     this.impl = new attentionRuntime.FlashAttention(dim, blockSize);
   }
 
+  /** @deprecated Use compute() — alias retained for backward compatibility with pre-interop callers */
   computeRaw(query: Float32Array, keys: Float32Array[], values: Float32Array[]): Float32Array {
     return this.impl.compute(query, keys, values);
   }
@@ -54,12 +67,47 @@ export class DotProductAttention {
     this.impl = new attentionRuntime.DotProductAttention(dim);
   }
 
+  /** @deprecated Use compute() — alias retained for backward compatibility with pre-interop callers */
   computeRaw(query: Float32Array, keys: Float32Array[], values: Float32Array[]): Float32Array {
     return this.impl.compute(query, keys, values);
   }
 
   compute(query: Float32Array, keys: Float32Array[], values: Float32Array[]): Float32Array {
     return this.impl.compute(query, keys, values);
+  }
+}
+
+export class MultiHeadAttention {
+  private impl: any;
+
+  constructor(config: AttentionConfig) {
+    this.impl = new attentionRuntime.MultiHeadAttention(config);
+  }
+
+  compute(input: Float32Array): Float32Array {
+    return this.impl.compute(input);
+  }
+
+  /** @deprecated Use compute() — alias retained for backward compatibility with pre-interop callers */
+  computeRaw(input: Float32Array): Float32Array {
+    return this.impl.compute(input);
+  }
+}
+
+export class LinearAttention {
+  private impl: any;
+
+  constructor(config: AttentionConfig) {
+    this.impl = new attentionRuntime.LinearAttention(config);
+  }
+
+  compute(input: Float32Array): Float32Array {
+    return this.impl.compute(input);
+  }
+
+  /** @deprecated Use compute() — alias retained for backward compatibility with pre-interop callers */
+  computeRaw(input: Float32Array): Float32Array {
+    return this.impl.compute(input);
   }
 }
 
