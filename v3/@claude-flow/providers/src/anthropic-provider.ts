@@ -132,7 +132,7 @@ export class AnthropicProvider extends BaseProvider {
       throw new AuthenticationError('Anthropic API key is required', 'anthropic');
     }
 
-    this.baseUrl = this.config.apiUrl || 'https://api.anthropic.com/v1';
+    this.baseUrl = this.config.apiUrl || process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com/v1';
     // MiniMax Anthropic-compatible endpoint requires Bearer auth, not x-api-key
     const isMiniMax = this.baseUrl.includes('minimax.io');
     this.headers = {
