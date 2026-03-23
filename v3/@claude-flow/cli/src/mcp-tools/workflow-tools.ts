@@ -6,6 +6,7 @@
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { spawn } from 'node:child_process';
 import type { MCPTool } from './types.js';
 
 // Storage paths
@@ -75,6 +76,80 @@ function loadWorkflowStore(): WorkflowStore {
 function saveWorkflowStore(store: WorkflowStore): void {
   ensureWorkflowDir();
   writeFileSync(getWorkflowPath(), JSON.stringify(store, null, 2), 'utf-8');
+}
+
+/**
+ * Execute a workflow step via MiniMax API
+ */
+async function executeStepViaMinimax(prompt: string): Promise<{ success: boolean; output?: string; error?: string }> {
+  return new Promise((resolve) => {
+    const apiToken = process.env.ANTHROPIC_AUTH_TOKEN;
+    const baseUrl = process.env.ANTHROPIC_BASE_URL || 'https://api.minimax.io/anthropic';
+
+    if (!apiToken) {
+      resolve({ success: false, error: 'ANTHROPIC_AUTH_TOKEN not set' });
+      return;
+    }
+
+    const payload = {
+      model: process.env.ANTHROPIC_MODEL || 'MiniMax-M2.7-highspeed',
+      max_tokens: 2000,
+      messages: [{ role: 'user', content: prompt }],
+    };
+
+    const curl = spawn('curl', [
+      '-s', '-X', 'POST',
+      `${baseUrl}/v1/messages`,
+      '-H', `Authorization: Bearer ${apiToken}`,
+      '-H', 'anthropic-version: 2023-06-01',
+      '-H', 'Content-Type: application/json',
+      '-d', JSON.stringify(payload),
+    ]);
+
+    let output = '';
+    let error = '';
+
+    curl.stdout.on('data', (data) => {
+      output += data.toString();
+    });
+
+    curl.stderr.on('data', (data) => {
+      error += data.toString();
+    });
+
+    curl.on('close', (code) => {
+      if (code !== 0) {
+        resolve({ success: false, error: error || `curl exited with code ${code}` });
+        return;
+      }
+
+      try {
+        const parsed = JSON.parse(output);
+        if (parsed.error) {
+          resolve({ success: false, error: parsed.error.message || JSON.stringify(parsed.error) });
+          return;
+        }
+
+        // Extract text content from response
+        let text = '';
+        if (parsed.content && Array.isArray(parsed.content)) {
+          for (const block of parsed.content) {
+            if (block.type === 'text') {
+              text += block.text;
+            }
+          }
+        }
+
+        resolve({ success: true, output: text });
+      } catch (e) {
+        resolve({ success: false, error: `Failed to parse response: ${e}` });
+      }
+    });
+
+    curl.on('error', (e) => {
+      resolve({ success: false, error: e.message });
+    });
+  });
 }
 
 export const workflowTools: MCPTool[] = [
@@ -159,6 +234,27 @@ export const workflowTools: MCPTool[] = [
         };
 
         store.workflows[workflowId] = workflow;
+        saveWorkflowStore(store);
+
+        // Execute each step
+        for (const step of workflow.steps) {
+          if (step.type === 'task') {
+            step.status = 'running';
+            step.startedAt = new Date().toISOString();
+
+            const prompt = (step.config?.task as string) || step.name;
+            const result = await executeStepViaMinimax(prompt);
+
+            step.status = result.success ? 'completed' : 'failed';
+            step.completedAt = new Date().toISOString();
+            step.result = result.success
+              ? { output: result.output }
+              : { error: result.error };
+          }
+        }
+
+        workflow.status = 'completed';
+        workflow.completedAt = new Date().toISOString();
         saveWorkflowStore(store);
       }
 
@@ -271,19 +367,31 @@ export const workflowTools: MCPTool[] = [
       workflow.startedAt = new Date().toISOString();
       workflow.currentStep = (input.startFromStep as number) || 0;
 
-      // Execute steps (in real implementation, this would be async/event-driven)
-      const results: Array<{ stepId: string; status: string }> = [];
+      // Execute steps
+      const results: Array<{ stepId: string; status: string; output?: string; error?: string }> = [];
       for (let i = workflow.currentStep; i < workflow.steps.length; i++) {
         const step = workflow.steps[i];
         step.status = 'running';
         step.startedAt = new Date().toISOString();
 
-        // For now, mark as completed (real implementation would execute actual tasks)
-        step.status = 'completed';
-        step.completedAt = new Date().toISOString();
-        step.result = { executed: true, stepType: step.type };
+        if (step.type === 'task') {
+          const prompt = (step.config?.task as string) || step.name;
+          const result = await executeStepViaMinimax(prompt);
 
-        results.push({ stepId: step.stepId, status: step.status });
+          step.status = result.success ? 'completed' : 'failed';
+          step.completedAt = new Date().toISOString();
+          step.result = result.success
+            ? { output: result.output }
+            : { error: result.error };
+
+          results.push({ stepId: step.stepId, status: step.status, output: result.output, error: result.error });
+        } else {
+          step.status = 'completed';
+          step.completedAt = new Date().toISOString();
+          step.result = { executed: true, stepType: step.type };
+          results.push({ stepId: step.stepId, status: step.status });
+        }
+
         workflow.currentStep = i + 1;
       }
 
